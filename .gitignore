@@ -39,6 +39,9 @@ faiss_index/
 *.index
 *.pkl
 *.bin
+milvus.db
+milvus.db.lock
+*.milvus.db
 
 # Model weights
 *.gguf

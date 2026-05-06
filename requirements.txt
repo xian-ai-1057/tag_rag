@@ -1,0 +1,12 @@
+pypdf>=4.0
+beautifulsoup4>=4.12
+lxml>=5.0
+pymilvus[milvus_lite]>=2.4
+FlagEmbedding>=1.2.10
+openai>=1.30
+python-dotenv>=1.0
+numpy>=1.26
+pytest>=8.0
+pytest-mock>=3.12
+# test/dev — used to generate PDF fixtures on the fly
+reportlab>=4.0
