@@ -22,6 +22,22 @@
 - Spec 結構：[specs/CLAUDE.md](specs/CLAUDE.md)
 - Phase / Team 配置：[specs/agent-teams-plan.md](specs/agent-teams-plan.md)
 
+## 查詢管線（query pipeline）
+
+`src/rag_chain.py::query()` 是唯一入口，支援**雙路徑**：
+
+1. **本地檢索**（`reranked=None`）— 呼叫 `retrieval.py::retrieve()` 對 Chroma 做
+   `similarity_search_with_relevance_scores`，輸出對齊外部 RAG 的 **arrkb schema**
+   （`RerankedChunk`）。
+2. **外部注入**（`reranked=[...]`，「arrkb 路徑」）— 直接餵入外部 production RAG 的
+   reranked 結果（`list[dict]` 或 `list[RerankedChunk]`），跳過本地檢索。
+   範例輸入見 [data/sample_reranked.json](data/sample_reranked.json)。
+
+兩條路徑都先 `coerce_reranked()` → `RerankedChunk` → `to_retrieved_chunk()` →
+`RetrievedChunk`，組 context block 後以 `temperature=0` 呼叫 LLM，再由
+`citation.py::renumber_and_filter` 只保留答案實際引用的 chunk 並 renumber 為 `1..N`，
+回傳 `RagAnswer`（`answer` / `citations` / `retrieved`）。
+
 ## 啟動
 
 ```bash
@@ -42,6 +58,11 @@ streamlit run app.py
 
 # CLI smoke test
 python -c "from rag import ingest_paths, query; ingest_paths(['data/docs/demo.md']); result = query('問題'); print(result.answer)"
+
+# 測試（LLM/embeddings 皆 mock，僅 integration smoke 需真 Ollama）
+pytest                       # 全部
+pytest tests/unit            # 單元
+pytest tests/integration     # 整合（test_pipeline_smoke_with_ollama 需 Ollama）
 ```
 
 ## 程式碼風格
@@ -72,11 +93,13 @@ python -c "from rag import ingest_paths, query; ingest_paths(['data/docs/demo.md
 | [src/history/](src/history/) | SQLite 對話持久化與管理 |
 | [src/eval/](src/eval/) | 品質評估與 hallucination 偵測 |
 | [src/ingest.py](src/ingest.py) | 檔案入庫 pipeline |
-| [src/rag_chain.py](src/rag_chain.py) | RAG query chain 與 citation renumbering |
-| [src/retrieval.py](src/retrieval.py) | 向量檢索與 chunk 管理 |
+| [src/rag_chain.py](src/rag_chain.py) | `query()` 雙路徑 orchestrator（本地檢索 / arrkb 注入）+ citation renumbering |
+| [src/retrieval.py](src/retrieval.py) | 向量檢索 + arrkb schema（`RerankedChunk` / `RetrievedChunk`）正規化 |
+| [src/citation.py](src/citation.py) | `renumber_and_filter` — 只留實際引用的 chunk 並重編號 |
 | [src/vectorstore.py](src/vectorstore.py) | ChromaDB 操作層 |
 | [specs/](specs/) | SDD 規格與 contracts |
 | [tests/](tests/) — pytest 單元與整合測試 |
 | [data/docs/](data/docs/) | 來源文件（含 demo.md） |
+| [data/sample_reranked.json](data/sample_reranked.json) | arrkb 路徑範例輸入（外部 reranked 結果） |
 | [data/chroma/](data/chroma/) | Chroma persistent dir（git ignore） |
 | [data/history.sqlite](data/history.sqlite) | 對話歷史（git ignore） |
