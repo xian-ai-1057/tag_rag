@@ -1,61 +1,21 @@
-# Python
+.env
+.venv/
 __pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg
-*.egg-info/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# OS junk
+.DS_Store
+
+# Local data
+data/chroma/
+data/docs/*
+!data/docs/.gitkeep
+data/history.sqlite
+*.sqlite
+
+# Build artefacts
 dist/
 build/
-eggs/
-parts/
-var/
-sdist/
-develop-eggs/
-.installed.cfg
-lib/
-lib64/
-wheels/
-
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
-
-# Environment variables
-.env
-.env.*
-!.env.example
-
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
-
-# Vector store / embeddings cache
-chroma/
-faiss_index/
-*.index
-*.pkl
-*.bin
-
-# Model weights
-*.gguf
-*.safetensors
-*.pt
-*.pth
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Logs
-*.log
-logs/
+*.egg-info/

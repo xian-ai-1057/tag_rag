@@ -1,0 +1,12 @@
+{
+  "quality_score": 1.0,
+  "sentence_supports": [
+    {
+      "sentence": "統一企業 1967 年成立 [1]。",
+      "supported": true,
+      "best_match_context_id": "8aa4cfc11c:0",
+      "overlap_score": 0.4286
+    }
+  ],
+  "unsupported_entities": []
+}

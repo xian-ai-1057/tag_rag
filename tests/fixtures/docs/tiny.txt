@@ -1,0 +1,1 @@
+Tag RAG 系統使用 ChromaDB 儲存文件向量，並透過 Ollama 本地模型進行語意檢索與答案生成。每次查詢時，系統會擷取最相關的 top-k 個 chunk，組合成上下文提示，再由 LLM 生成帶有 [n] 引用標記的答案。最後透過 renumber_and_filter 函式重新編號，確保引用編號的一致性。

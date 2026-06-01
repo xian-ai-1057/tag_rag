@@ -1,0 +1,57 @@
+{
+  "answer": "台新銀行的信用卡核心品牌是 Richart Life，2024 年累計發卡 300 萬張 [1]。同年數位帳戶用戶數突破 200 萬 [2]。",
+  "citations": [
+    {
+      "n": 1,
+      "context_id": "8db342d6-59b2-58a6-98f4-de6d992a73f3",
+      "file_id": "33d3cedc2d",
+      "content": "## 信用卡\n\n台新銀行的信用卡業務以 Richart Life 為核心品牌，主打數位原生客群。2024 年累計發卡量達 300 萬張。",
+      "filename": "demo.md",
+      "page": 0,
+      "chunk_index": 2,
+      "score": 0.727
+    },
+    {
+      "n": 2,
+      "context_id": "e1a9d33b-31d6-570a-8265-a36a5c60ce3c",
+      "file_id": "33d3cedc2d",
+      "content": "## 數位帳戶\n\n2024 年 Richart 數位帳戶用戶數突破 200 萬，存款餘額 4500 億。",
+      "filename": "demo.md",
+      "page": 0,
+      "chunk_index": 5,
+      "score": 0.681
+    }
+  ],
+  "retrieved": [
+    {
+      "n": 1,
+      "context_id": "8db342d6-59b2-58a6-98f4-de6d992a73f3",
+      "file_id": "33d3cedc2d",
+      "content": "## 信用卡\n\n台新銀行的信用卡業務以 Richart Life 為核心品牌，主打數位原生客群。2024 年累計發卡量達 300 萬張。",
+      "filename": "demo.md",
+      "page": 0,
+      "chunk_index": 2,
+      "score": 0.727
+    },
+    {
+      "n": 2,
+      "context_id": "e1a9d33b-31d6-570a-8265-a36a5c60ce3c",
+      "file_id": "33d3cedc2d",
+      "content": "## 數位帳戶\n\n2024 年 Richart 數位帳戶用戶數突破 200 萬，存款餘額 4500 億。",
+      "filename": "demo.md",
+      "page": 0,
+      "chunk_index": 5,
+      "score": 0.681
+    },
+    {
+      "n": 3,
+      "context_id": "57ba8f98-136d-507e-926d-735b19c370e5",
+      "file_id": "33d3cedc2d",
+      "content": "## 法人金融\n\n台新銀行的法金業務聚焦中小企業放款與供應鏈金融。",
+      "filename": "demo.md",
+      "page": 0,
+      "chunk_index": 7,
+      "score": 0.402
+    }
+  ]
+}
