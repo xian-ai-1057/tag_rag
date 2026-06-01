@@ -1,69 +1,82 @@
-# CLAUDE.md
+# Tag RAG — Project Guide for Claude
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## What this is
 
-## Project
+帶 chunk 級 inline `[n]` 引用的本地 RAG demo，作為 Taishin 內部知識庫 RAG 雛形。
 
-Sentence-level citation RAG MVP. Each generated claim is traceable back to a specific source sentence (file path, page, char offset, exact text). Runs entirely on local infra (Ollama + Milvus Lite + BGE-M3) but the LLM client is OpenAI-compatible and can be swapped for vLLM / OpenAI / any compatible endpoint without touching other modules.
+- **LLM / Embedding**：本地 Ollama（OpenAI 相容介面 `http://localhost:11434/v1`）
+- **Vector store**：ChromaDB PersistentClient（免 Docker）
+- **UI**：Streamlit
+- **支援格式**：Tier 1 = PDF / MD / TXT；Tier 2 加 DOCX / XLSX / HTML
 
-## Common commands
+## 開發狀態
+
+| Tier | 範圍 | 狀態 |
+|------|------|------|
+| Tier 1 | 核心 RAG + chunk_id stable refs + renumber | ✅ Done（`rag.py` + `app.py`） |
+| Tier 2 | SDD 拆模組 + 多格式 loader + chat history + quality eval | ✅ Done |
+| Tier 3 | Streaming / 多使用者隔離 / OCR / URL fetch | 📋 Backlog |
+
+詳見：
+- 完整計畫：[~/.claude/plans/rag-citation-mvp-rag-citation-memoized-locket.md](/Users/kee/.claude/plans/rag-citation-mvp-rag-citation-memoized-locket.md)
+- Spec 結構：[specs/CLAUDE.md](specs/CLAUDE.md)
+- Phase / Team 配置：[specs/agent-teams-plan.md](specs/agent-teams-plan.md)
+
+## 啟動
 
 ```bash
-pip install -r requirements.txt
-cp .env.example .env
+# 一次性設定 — Ollama 與模型
+brew install ollama && brew services start ollama
+ollama pull qwen3.5:9b      # LLM（中文友善；或 gemma4:e4b / qwen3:8b）
+ollama pull bge-m3          # embedding（多語）
 
-# local model (one-time + background)
-ollama pull qwen2.5:7b
-ollama serve
+# Python 環境
+uv venv && source .venv/bin/activate
+uv pip install -e .
 
-# CLI
-python scripts/ingest.py data/sample.pdf data/notes.md
-python scripts/ask.py "your question"
+# 設定
+cp .env.example .env        # 預設值即可；要啟用 chat history 需檢查 HISTORY_DB_PATH
 
-# tests
-pytest                       # default — excludes slow integration tests
-pytest -m slow               # real BGE-M3 + real Ollama integration
-pytest tests/test_X.py -v    # single phase
-pytest tests/test_X.py::test_name  # single test
+# 啟動 UI
+streamlit run app.py
+
+# CLI smoke test
+python -c "from rag import ingest_paths, query; ingest_paths(['data/docs/demo.md']); result = query('問題'); print(result.answer)"
 ```
 
-`pytest.ini` sets `pythonpath = .` and auto-excludes the `slow` marker. Default suite uses monkeypatched embedder/LLM and a Milvus Lite tmp file — no network or model download required.
+## 程式碼風格
 
-## Architecture
+- Python 3.11+，type hints 用 `str | None` 而非 `Optional[str]`
+- DTO 全用 Pydantic v2（`model_config = ConfigDict(extra="forbid")`）
+- Logging：用 `logging.getLogger("rag")` / `logging.getLogger("src.<module>")`，noisy lib（langchain/httpx/chromadb）壓到 WARNING
+- Default no comments — code 自我解釋；只在非顯然的 invariants / workarounds 加單行註解
+- **不**寫 docstring 給每個 function；只寫 module-level + 複雜邏輯（如 `_renumber_and_filter`）
+- 新模組放 `src/<feature>/`，每個子目錄均需 `__init__.py` 暴露公開 API（含 `__all__`）
 
-Two pipelines share the same data structures:
+## SDD 規則（給 teammate）
 
-**Ingest** (`RAG.ingest`, `src/rag.py:36`):
-`load_document` → `split_sentences` → `build_chunks` → `Embedder.embed` → `VectorStore.upsert`
+- `specs/<NNN>-<name>/spec.md` 是單一事實。發現 spec 漏洞 → message Lead 改 spec，不自行解讀
+- `specs/<NNN>-<name>/contracts/` 鎖死介面，任何修改回報 Lead
+- 兩位 teammate 不可動同一檔案；超界用 mailbox 重新分配
+- LLM 呼叫測試一律 mock，不打真 Ollama
+- 不寫入 `Archive/`（目前無此目錄，但保留禁令）
 
-**Query** (`RAG.query`, `src/rag.py:60`):
-`Embedder.embed(question)` → `VectorStore.search` → `build_citation_messages` → `LLMClient.chat` → `parse_citations` → `AnswerWithCitations`
+## 重點檔案
 
-The citation mechanism is the central architectural concern; the modules below are designed to preserve the metadata it depends on.
-
-### Citation flow (the key invariant)
-
-1. **Loaders** (`src/loaders.py`) emit a `Document` with `text` plus, for PDFs, a `pages: list[PageSpan]` mapping char ranges → 1-indexed page numbers.
-2. **Splitter** (`src/splitter.py`) emits `Sentence(sid, text, char_start, char_end, page)` such that `doc.text[char_start:char_end] == text` (asserted). `build_chunks` groups sentences greedily to ~`target_chars` with `overlap_sentences` overlap and reuses sentence objects (does not renumber).
-3. **VectorStore** (`src/vector_store.py`) serializes `chunk.sentences` (via `dataclasses.asdict`) into a Milvus JSON metadata field. The PK is a deterministic INT64 from `(doc_id, chunk_id)` via `_make_pk` (CRC32 high bits + chunk_id low bits) — upsert is idempotent. Index uses `AUTOINDEX` + `IP` metric on L2-normalized vectors (cosine via inner product). The constructor refuses to attach to an existing collection with a different `dim`.
-4. **Prompt** (`src/prompt.py`) renders retrieval hits as `[chunk_id=N] (from file, page P)` headers followed by per-sentence lines `s0: ...`, `s1: ...`. **Critical**: the `chunk_id` in the prompt is the *position in the hits list*, NOT `ChunkHit.chunk_id`. The system prompt instructs the LLM to wrap every claim in `<CIT c="<chunk_id>" s="<sentence_id_or_range>">claim</CIT>`.
-5. **LLM** (`src/llm.py`) is a thin OpenAI-SDK wrapper; `temperature=0.0` by default for citation determinism.
-6. **Citation parser** (`src/citation_parser.py`) regex-matches `<CIT>` tags, looks up `chunks[chunk_id].sentences[sid]` to recover full metadata (page, char range, exact text), and produces `AnswerWithCitations(clean_answer, citations)`. `s` may be a single id, range `3-5`, or comma list `1,4`. Out-of-range / malformed tags are warned and dropped (the bare claim text is preserved in the answer); the parser asserts no `<CIT>` leaks into `clean_answer`.
-
-When changing splitter, chunk metadata, or hit serialization, the contract `chunk.sentences[sid]` must keep working for the whole pipeline — citation tests and the parser depend on this round-trip.
-
-### Configuration
-
-`Config.from_env()` (`src/config.py`) reads env vars (defaults in `.env.example`): `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_API_KEY`, `MILVUS_URI`, `MILVUS_COLLECTION`, `EMBEDDING_MODEL`, `EMBEDDING_DIM`, `TOP_K`. `RAG.__init__` only constructs a `Config` for components left unspecified — tests inject mocks directly.
-
-## Development model: Spec-Driven Development
-
-Each phase has a spec in `specs/phase_*.md` (loaders, splitter, embedding, vector_store, llm_prompt, citation_parser, pipeline, release). Cycle is **spec → tests (red) → impl (green) → acceptance**. When modifying a module, read its phase spec first — the spec is the source of truth for behavioral contracts (e.g. char-offset invariants, abbreviation lists, chunk overlap semantics, PK derivation).
-
-## Out of scope (intentionally not implemented)
-
-- OCR for scanned PDFs (warns and returns empty text)
-- Word/PPT direct loading (convert to txt/PDF first)
-- Hybrid retrieval (dense-only)
-- Multi-turn conversation history
-- UI
+| 檔案/目錄 | 用途 |
+|----------|------|
+| [rag.py](rag.py) | Tier 1 façade（`src.*` re-export） |
+| [app.py](app.py) | Streamlit UI |
+| [src/config.py](src/config.py) | 環境變數與設定（Pydantic Settings） |
+| [src/loaders/](src/loaders/) | 多格式載入器（PDF / DOCX / XLSX / HTML / Text） |
+| [src/history/](src/history/) | SQLite 對話持久化與管理 |
+| [src/eval/](src/eval/) | 品質評估與 hallucination 偵測 |
+| [src/ingest.py](src/ingest.py) | 檔案入庫 pipeline |
+| [src/rag_chain.py](src/rag_chain.py) | RAG query chain 與 citation renumbering |
+| [src/retrieval.py](src/retrieval.py) | 向量檢索與 chunk 管理 |
+| [src/vectorstore.py](src/vectorstore.py) | ChromaDB 操作層 |
+| [specs/](specs/) | SDD 規格與 contracts |
+| [tests/](tests/) — pytest 單元與整合測試 |
+| [data/docs/](data/docs/) | 來源文件（含 demo.md） |
+| [data/chroma/](data/chroma/) | Chroma persistent dir（git ignore） |
+| [data/history.sqlite](data/history.sqlite) | 對話歷史（git ignore） |

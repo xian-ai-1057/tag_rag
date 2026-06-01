@@ -1,3 +1,4 @@
-"""tag_rag: Sentence-level citation RAG MVP."""
+"""src package — auto-initialize logging on first import."""
+from src.logging_setup import setup_logging
 
-__version__ = "0.1.0"
+setup_logging()

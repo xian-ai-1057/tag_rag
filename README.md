@@ -1,611 +1,292 @@
-# tag_rag
+# Tag RAG — Citation MVP
 
-**Sentence-level Citation RAG MVP** — 一個能讓 LLM 生成的每一個事實聲明（claim）都精準反查回原文具體句子的最小可行 RAG 系統。每個 citation 都附帶：原始檔案路徑、頁碼、char offset 區間、原句完整文字。
+帶 chunk 級 inline `[n]` 引用的本地 RAG demo。
 
-整套系統可在純本機環境運行（Ollama + Milvus Lite + BGE-M3），但 LLM client 採 OpenAI 相容介面，因此可隨時換成 vLLM、OpenAI Cloud、Anthropic、或任意 OpenAI 相容服務，**完全不需要改動其他模組**。
+- LLM / Embedding：本地 Ollama（OpenAI 相容介面）
+- Vector store：ChromaDB persistent（免 Docker）
+- UI：Streamlit
+- 支援格式：PDF / DOCX / XLSX / HTML / Markdown / TXT（Tier 2 完整支援）
 
----
+## 系統概觀（白話版）
 
-## Table of Contents
+用「圖書館 + 助理」的比喻：把文件丟進「資料櫃」、提問時「助理」會去查資料、找出答案並附上「資料出處」。
 
-1. [核心理念：為什麼要做 sentence-level citation](#核心理念)
-2. [快速開始](#快速開始-quickstart)
-3. [Architecture Overview](#architecture-overview)
-4. [Function Flow（函式呼叫流程）](#function-flow)
-5. [Data Flow（資料結構轉換流程）](#data-flow)
-6. [完整端到端範例](#完整端到端範例)
-7. [Module Reference](#module-reference)
-8. [Configuration](#configuration)
-9. [Testing](#testing)
-10. [LLM / Embedding / Vector Store Swap](#llm--embedding--vector-store-swap)
-11. [Limitations](#limitations)
+```mermaid
+flowchart TD
+    subgraph Step1["📚 步驟一：把資料放進系統"]
+        A1[📄 上傳文件<br/>PDF / Word / Excel / 網頁 / 文字檔] --> A2[✂️ 系統自動<br/>把長文件切成小段]
+        A2 --> A3[🗂️ 建立索引<br/>幫每段內容貼上標籤<br/>方便日後查找]
+        A3 --> A4[(📦 知識櫃<br/>儲存所有資料)]
+    end
 
----
+    subgraph Step2["💬 步驟二：提問與回答"]
+        B1[🙋 使用者輸入問題] --> B2[🔍 系統去知識櫃<br/>找出最相關的幾段資料]
+        B2 --> B3[🤖 AI 助理閱讀這些資料<br/>整理出一段回答]
+        B3 --> B4[📎 自動標註資料來源<br/>方便使用者查證]
+        B4 --> B5[✅ 顯示答案 + 出處<br/>例如：根據文件 A 第 3 頁]
+    end
 
-## 核心理念
+    subgraph Step3["🛡️ 步驟三：品質把關與記錄"]
+        C1[📊 自動評估答案品質<br/>檢查是否真的有出處支持<br/>標記可能編造的內容]
+        C2[💾 對話自動保存<br/>可隨時回顧過去問答]
+    end
 
-NotebookLM、Claude Citations API、Perplexity 都把 sentence-level citation 視為核心差異化能力 — 它能大幅降低 hallucination，並讓使用者**親自驗證**每一個答案的來源。本專案以本機 LLM 復現此能力，採用三段式設計：
+    A4 -.->|提供資料| B2
+    B5 --> C1
+    B5 --> C2
 
-| 階段 | 技術 | 來源啟發 |
-|---|---|---|
-| Retrieval pre-numbering | 把每個 chunk 的句子預先用 `s0:`, `s1:` 編號塞進 prompt | Perplexity |
-| Tag-based output | 強制 LLM 用 `<CIT c="X" s="Y">claim</CIT>` 包裹每個事實聲明 | Anthropic Citations API |
-| Regex parser + 反查 | 把 tag 用 chunk_id / sentence_id 對應回 retrieval hit 內保留的完整 metadata | 本專案 |
+    style Step1 fill:#e3f2fd
+    style Step2 fill:#f3e5f5
+    style Step3 fill:#fff3e0
+```
 
-**關鍵不變式（invariant）**：從 ingest 到 query，sentence 的 `(char_start, char_end, page)` 三元組必須完整保留。整個 pipeline 的所有設計都圍繞這個不變式而生。
+**三句話總結**：
+1. **餵資料**：把公司文件丟進系統，它會自動切段、建索引存進「知識櫃」。
+2. **問答案**：使用者問問題，AI 從知識櫃找資料、寫出帶有「來源頁碼」的答案。
+3. **可信賴**：系統會自動檢查答案是否有依據、會不會亂講，並保留對話紀錄。
 
----
-
-## 快速開始 (Quickstart)
+## 啟動步驟
 
 ```bash
-# 1. 安裝依賴
-pip install -r requirements.txt
-cp .env.example .env
+# 0. 安裝 Ollama 並 pull 模型（一次性）
+brew install ollama && brew services start ollama
+ollama pull gemma4:e4b      # LLM（預設；中文友善的替代選擇：qwen3.5:9b / qwen3:8b）
+ollama pull bge-m3          # embedding（多語）
 
-# 2. 啟動本機 LLM（另一個 shell）
-ollama pull qwen2.5:7b
-ollama serve
+# 1. Python 環境
+uv venv && source .venv/bin/activate
+uv pip install -e .
 
-# 3. 把文件放進向量庫（支援 PDF / txt / md / html）
-python scripts/ingest.py data/sample.pdf data/notes.md
+# 2. 設定環境變數
+cp .env.example .env        # 預設值即可，要換模型再改
 
-# 4. 提問
-python scripts/ask.py "公司去年營收成長多少？"
+# 3. 啟動
+streamlit run app.py
 ```
 
-範例輸出：
+## 使用流程
 
-```
-Answer:
-營收較去年成長 12% [1]，主要來自雲端業務 [2]。
+1. 開啟瀏覽器（Streamlit 預設 `http://localhost:8501`）
+2. 在左側欄「📥 文件管理」區塊上傳 PDF / DOCX / XLSX / HTML / MD / TXT，按「入庫」
+3. 按「新對話」開始新的對話，或從對話歷史切換現有對話
+4. 在「💬 問答」分頁提問
+5. 答案會以 `[1][2]` 形式 inline 標註，展開「📚 引用來源」面板檢視每個編號對應的原文片段
+6. 使用側欄 Sidebar 重命名或刪除對話
 
-References:
-  [1] 營收成長 12%
-      ← annual_report.pdf:page 5 char[1042:1080]
-        "營收較去年成長 12%，達到 NT$ 950M。"
-  [2] 主要來自雲端業務
-      ← annual_report.pdf:page 5 char[1080:1135]
-        "雲端服務貢獻了過半的營收增長。"
-```
+## 格式支援
 
----
+| 格式 | 說明 |
+|------|------|
+| **PDF** | 全文逐頁擷取，每頁產一個 document（含 page metadata） |
+| **DOCX** | 段落與標題層級保留，內容按邏輯分段 |
+| **XLSX** | 每個 sheet 逐行掃描，每 50 列重複欄位名稱以保持上下文，支援公式評估值 |
+| **HTML** | 過濾 script / style 等噪音標籤，保留 p / div / li / blockquote 等內容元素 |
+| **Markdown** | 標題層級與代碼塊結構保留，內容按語義分段 |
+| **TXT** | 純文字逐行讀入，簡單分段 |
 
-## Architecture Overview
+## 對話歷史
 
-```
-┌──────────────────── INGEST PIPELINE ────────────────────┐
-│                                                          │
-│   files       loaders      splitter    embedder  store   │
-│   ─────       ───────      ────────    ────────  ─────   │
-│   PDF/txt ──► Document ──► Sentence ──► (N,1024) ──► Milvus
-│   md/html      + pages       + Chunk     float32   Lite  │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
+- 所有對話自動持久化到 `./data/history.sqlite`
+- 跨瀏覽器 session 保留歷史（重整頁面、關閉重啟仍可回復）
+- UI 左側欄 Sidebar 可：
+  - 切換現有對話
+  - 重命名對話標題
+  - 刪除對話（含消息歷史）
 
-┌──────────────────── QUERY PIPELINE ─────────────────────┐
-│                                                          │
-│   question  embedder    store        prompt     llm      │
-│   ────────  ────────    ─────        ──────     ───      │
-│   "..."  ──► (1,1024) ──► top-k ──► messages ──► raw     │
-│                          ChunkHit   "Sources:..."  text  │
-│                          [chunk_id=0]               │    │
-│                            s0: ...                  ▼    │
-│                            s1: ...           <CIT c="0"  │
-│                                                s="1">..  │
-│                                              </CIT>      │
-│                                                     │    │
-│                                                     ▼    │
-│                                              citation    │
-│                                              parser      │
-│                                                     │    │
-│                                                     ▼    │
-│                                       AnswerWithCitations│
-│                                       (clean_answer +    │
-│                                        citations[])      │
-└──────────────────────────────────────────────────────────┘
-```
+## 品質評估
 
-兩條 pipeline 共用同一組 dataclass — `Document`、`Sentence`、`Chunk`、`ChunkHit`、`Citation`。`sentence` 的中繼資料一路被攜帶到最終的 `Citation`，這就是 sentence-level 反查能成立的關鍵。
+每條回答會自動執行品質評估，包括：
 
----
+- **Quality Score**：基於句級 support 與實體幻覺偵測的綜合評分
+- **Sentence Support**：每句話評估是否有對應的檢索出來的 chunk 支持
+- **Entity Hallucination**：使用規則型 regex 匹配（人名、數字、日期、組織名等），標記可能編造的實體
 
-## Function Flow
+評估邏輯為 Deterministic、純規則基礎、執行時間 < 500ms，無依賴 LLM 的額外呼叫。
 
-### Ingest 函式呼叫鏈（`RAG.ingest`）
-
-```
-scripts/ingest.py:main(argv)
-  └─► RAG.__init__()                          # src/rag.py:17
-        ├─► Config.from_env()                 # src/config.py
-        ├─► Embedder(model_name=...)          # 懶載入，第一次 embed 才下載 BGE-M3
-        ├─► VectorStore(uri, collection, dim) # 創建或附加到 Milvus collection
-        └─► LLMClient(base_url, api_key, ...) # 只是建立 OpenAI client，未連線
-  │
-  └─► RAG.ingest([path1, path2, ...])         # src/rag.py:36
-        for each path:
-        │
-        ├─► load_document(path)               # src/loaders.py:173
-        │     └── 依副檔名 dispatch:
-        │         ├── _load_text(p)           # .txt / .md
-        │         ├── _load_html(p)           # .html / .htm  (BeautifulSoup)
-        │         └── _load_pdf(p)            # .pdf  (pypdf, 累積 PageSpan)
-        │     RETURN Document(doc_id, source_path, text, pages)
-        │
-        ├─► split_sentences(doc)              # src/splitter.py:143
-        │     ├── _BOUNDARY_PATTERN.finditer  # CJK 終結符 + 英文 . ! ? …
-        │     ├── _is_abbreviation_period     # 過濾 "Dr." "e.g." "et al."
-        │     └── _resolve_page               # char_start → page_num (PDF only)
-        │     RETURN list[Sentence(sid, text, char_start, char_end, page)]
-        │
-        ├─► build_chunks(doc, sentences,      # src/splitter.py:229
-        │                target_chars=800,
-        │                overlap_sentences=1)
-        │     └── greedy 累積 sentence 至 ≥ target_chars，再向後 overlap 1 句
-        │     RETURN list[Chunk(chunk_id, doc_id, text, char_start, char_end, sentences)]
-        │
-        ├─► Embedder.embed([c.text for c in chunks])   # src/embedder.py:56
-        │     ├── 第一次呼叫：FlagEmbedding.BGEM3FlagModel(...)
-        │     ├── model.encode(texts, batch_size=8, max_length=512)
-        │     └── L2-normalize  (defensive — Milvus 用 IP 模擬 cosine)
-        │     RETURN np.ndarray (N, 1024) float32
-        │
-        └─► VectorStore.upsert(chunks, embeddings, source_paths)  # vector_store.py:106
-              for each (chunk, vec):
-              ├── pk = _make_pk(doc_id, chunk_id)    # CRC32 ⊕ chunk_id → 確定性 INT64
-              └── metadata JSON =
-                    { chunk_text, char_start, char_end,
-                      sentences: [asdict(s) ...],     # 攜帶完整 sentence list
-                      source_path, doc_title }
-              MilvusClient.upsert(rows)              # idempotent — 同 pk 直接覆寫
-```
-
-### Query 函式呼叫鏈（`RAG.query`）
-
-```
-scripts/ask.py:main(argv)
-  └─► RAG.__init__()                          # 同 ingest
-  │
-  └─► RAG.query(question)                     # src/rag.py:60
-        │
-        ├─► Embedder.embed([question])        # 一次 embed 一個句子
-        │     RETURN np.ndarray (1, 1024)
-        │
-        ├─► VectorStore.search(q_emb[0], k=top_k)         # vector_store.py:144
-        │     └── MilvusClient.search(metric_type=IP)
-        │     RETURN list[ChunkHit(chunk_id, doc_id, score,
-        │                          chunk_text, char_start, char_end,
-        │                          sentences[], source_path, doc_title)]
-        │
-        ├─► build_citation_messages(question, hits)        # prompt.py:72
-        │     ├── render_chunks_block(hits)
-        │     │     for prompt_chunk_idx, hit in enumerate(hits):
-        │     │       header = "[chunk_id=<idx>] (from file.pdf, page N)"
-        │     │       lines  = [ "  s0: ...", "  s1: ...", ... ]
-        │     │     ⚠️ 注意：prompt 裡的 chunk_id 是 hits 的 list index,
-        │     │              NOT ChunkHit.chunk_id
-        │     └── RETURN [ {role:"system", content: CITATION_SYSTEM_PROMPT},
-        │                  {role:"user",   content: "Sources:...\n\nQuestion: ..."} ]
-        │
-        ├─► LLMClient.chat(messages)          # src/llm.py:26
-        │     └── OpenAI SDK: client.chat.completions.create(temperature=0.0)
-        │     RETURN raw_text
-        │       e.g. "營收成長 <CIT c=\"0\" s=\"1\">12%</CIT>，主要來自
-        │             <CIT c=\"0\" s=\"2\">雲端業務</CIT>。"
-        │
-        └─► parse_citations(raw, hits)        # src/citation_parser.py:68
-              for each <CIT c="X" s="Y">claim</CIT> match:
-              ├── int(X)  → 對應 hits[X]（記得 X 是 list index）
-              ├── _expand_sentence_spec(Y)
-              │     "3"     → [3]
-              │     "3-5"   → [3, 4, 5]
-              │     "1,4"   → [1, 4]
-              │     "1,3-5" → [1, 3, 4, 5]
-              ├── 取 hits[X].sentences[s_id] for s_id in expanded
-              ├── 取出 page / char_start / char_end / 原句 text
-              └── 把 <CIT>...</CIT> 替換成 "claim [N]"
-              RETURN AnswerWithCitations(clean_answer, citations[Citation, ...])
-```
-
----
-
-## Data Flow
-
-下面以一段中英混排文字「逐 step」追蹤資料變形，你可以對照 [完整端到端範例](#完整端到端範例) 看實際數值。
-
-### Step 1 ── File → Document
-
-**INPUT**: `data/notes.md`
-```
-公司去年營收成長 12%。雲端服務貢獻了過半的營收增長。
-Dr. Lee will report next quarter.
-```
-
-**OUTPUT**: `Document`
-```python
-Document(
-    doc_id      = "notes",
-    source_path = "/home/user/tag_rag/data/notes.md",
-    text        = "公司去年營收成長 12%。雲端服務貢獻了過半的營收增長。\nDr. Lee will report next quarter.",
-    pages       = None,            # PDF 才會填，此處為 None
-)
-```
-
-> 若是 PDF，`pages = [PageSpan(page_num=1, char_start=0, char_end=842), PageSpan(page_num=2, char_start=844, char_end=...)]`，每一頁之間會插入 `"\n\n"` 分隔（cursor 累進 +2，但分隔字元不屬於任何 PageSpan）。
-
-### Step 2 ── Document → Sentences
-
-**OUTPUT**: `list[Sentence]`
-```python
-[
-  Sentence(sid=0, text="公司去年營收成長 12%。",     char_start=0,  char_end=12, page=None),
-  Sentence(sid=1, text="雲端服務貢獻了過半的營收增長。", char_start=12, char_end=27, page=None),
-  Sentence(sid=2, text="Dr. Lee will report next quarter.", char_start=28, char_end=61, page=None),
-]
-```
-
-關鍵不變式：`doc.text[s.char_start : s.char_end] == s.text`（splitter 內部以 `assert` 檢查）。
-
-注意 `Dr.` 沒有被切斷成兩句 — `_is_abbreviation_period` 過濾掉了。`et al.`、`e.g.`、`i.e.` 同理。
-
-### Step 3 ── Sentences → Chunks
-
-`build_chunks` 以 `target_chars=800` 為門檻 greedy 累積，超過後 flush 成一個 chunk，並 rewind `overlap_sentences=1` 個句子確保語意連續。
-
-**OUTPUT (假設 target_chars=30 以便看見分割)**: `list[Chunk]`
-```python
-[
-  Chunk(
-    chunk_id  = 0,
-    doc_id    = "notes",
-    text      = "公司去年營收成長 12%。雲端服務貢獻了過半的營收增長。",
-    char_start= 0,
-    char_end  = 27,
-    sentences = [Sentence(sid=0, ...), Sentence(sid=1, ...)],
-  ),
-  Chunk(
-    chunk_id  = 1,
-    doc_id    = "notes",
-    text      = "雲端服務貢獻了過半的營收增長。\nDr. Lee will report next quarter.",
-    char_start= 12,
-    char_end  = 61,
-    sentences = [Sentence(sid=1, ...), Sentence(sid=2, ...)],   # sid=1 是 overlap
-  ),
-]
-```
-
-> ⚠️ overlap 後的 `Sentence` 物件**不重新編號** — `sid` 仍是原 doc 內的位置。`Chunk.sentences[i].sid != i`，這是刻意的設計，方便日後做去重 / 跨 chunk 比對。但 prompt 渲染與 citation 反查時用的是 `Chunk.sentences` 的 list index，跟 `sid` 無關（見 Step 6）。
-
-### Step 4 ── Chunks → Embeddings → Milvus
-
-**Embedder.embed**:
-```
-input :  ["公司去年營收成長 12%。雲端服務貢獻了過半的營收增長。", "雲端服務..."]
-output:  np.ndarray shape=(2, 1024) dtype=float32, L2-normalized
-```
-
-**VectorStore.upsert** 寫進 Milvus 的每一 row：
-```python
-{
-  "pk":        4002847317760000000,   # _make_pk("notes", 0) — CRC32 高位 ⊕ chunk_id 低位
-  "vector":    [0.0123, -0.0451, ...],     # 1024-dim float
-  "doc_id":    "notes",
-  "chunk_id":  0,
-  "metadata":  {                       # JSON field — 攜帶反查所需的所有資訊
-      "chunk_text":  "公司去年營收成長 12%。雲端服務貢獻了過半的營收增長。",
-      "char_start":  0,
-      "char_end":    27,
-      "sentences": [
-          {"sid": 0, "text": "公司去年營收成長 12%。",     "char_start": 0,  "char_end": 12, "page": None},
-          {"sid": 1, "text": "雲端服務貢獻了過半的營收增長。", "char_start": 12, "char_end": 27, "page": None},
-      ],
-      "source_path": "/home/user/tag_rag/data/notes.md",
-      "doc_title":   "notes",
-  },
-}
-```
-
-> ✅ 因為 `pk` 由 `(doc_id, chunk_id)` 確定性導出，重 ingest 同一份文件會直接覆寫舊 row — upsert 是 idempotent 的。
-
-### Step 5 ── Question → ChunkHit[]
-
-**INPUT**: `question = "公司去年營收成長多少？"`
-
-**Embedder.embed** → `(1, 1024)`
-**VectorStore.search(q_emb[0], k=5)** → `list[ChunkHit]`：
-
-```python
-[
-  ChunkHit(
-    chunk_id    = 0,
-    doc_id      = "notes",
-    score       = 0.871,                                     # IP score (≈ cosine)
-    chunk_text  = "公司去年營收成長 12%。雲端服務貢獻了過半的營收增長。",
-    char_start  = 0,
-    char_end    = 27,
-    sentences   = [ {sid:0, text:"...", char_start:0,  char_end:12, page:None},
-                    {sid:1, text:"...", char_start:12, char_end:27, page:None} ],
-    source_path = "/home/user/tag_rag/data/notes.md",
-    doc_title   = "notes",
-  ),
-  # ... 其他 hits
-]
-```
-
-### Step 6 ── ChunkHit[] → Prompt Messages
-
-`build_citation_messages` 把 hits **以其在 list 中的位置**重新編號（**不是** `ChunkHit.chunk_id`），這個重編號的索引就是 LLM 將會引用的 `c="..."` 值：
-
-```text
-SYSTEM:
-You are a careful research assistant. Answer the user's question USING ONLY
-the sources provided below. For every factual claim, wrap it in a citation
-tag of the form:
-  <CIT c="<chunk_id>" s="<sentence_id>">your phrasing of the claim</CIT>
-... (略)
-
-USER:
-Sources:
-[chunk_id=0] (from notes.md)
-  s0: 公司去年營收成長 12%。
-  s1: 雲端服務貢獻了過半的營收增長。
-
-[chunk_id=1] (from notes.md)
-  s0: 雲端服務貢獻了過半的營收增長。
-  s1: Dr. Lee will report next quarter.
-
-Question: 公司去年營收成長多少？
-```
-
-> 🔑 prompt 裡 `[chunk_id=0]` 表示 `hits[0]`，其底下的 `s0` 表示 `hits[0].sentences[0]`。LLM 不知道 / 不需要知道原 doc 內的 sid。
-
-### Step 7 ── LLM Raw Output → AnswerWithCitations
-
-LLM 原始輸出（`raw`）：
-```text
-公司去年營收較前年成長 <CIT c="0" s="0">12%</CIT>。其中 <CIT c="0" s="1">主要由雲端服務貢獻</CIT>。
-```
-
-`parse_citations(raw, hits)` 一邊掃描 `<CIT>` tag、一邊把 `(c, s)` 反查回 `hits[c].sentences[s]`：
-
-```python
-AnswerWithCitations(
-  clean_answer = "公司去年營收較前年成長 12% [1]。其中 主要由雲端服務貢獻 [2]。",
-  citations = [
-    Citation(
-      ref_num       = 1,
-      claim_text    = "12%",
-      chunk_id      = 0,
-      sentence_ids  = [0],
-      source_path   = "/home/user/tag_rag/data/notes.md",
-      doc_id        = "notes",
-      doc_title     = "notes",
-      page          = None,
-      sentence_text = "公司去年營收成長 12%。",
-      char_start    = 0,
-      char_end      = 12,
-    ),
-    Citation(
-      ref_num       = 2,
-      claim_text    = "主要由雲端服務貢獻",
-      chunk_id      = 0,
-      sentence_ids  = [1],
-      ...
-      sentence_text = "雲端服務貢獻了過半的營收增長。",
-      char_start    = 12,
-      char_end      = 27,
-    ),
-  ],
-)
-```
-
-**容錯規則**：
-- `c` 超出範圍 / `s` 超出範圍 → warn，把 tag 拆掉只保留 claim 文字（不會留下未編號的 `[N]`）
-- `s="3-1"`（順序顛倒） → warn 後正規化為 `[1, 2, 3]`
-- `s="1,4"` 部分有效 → 取交集，用有效的部分組合 `sentence_text`
-- 解析後 `assert "<CIT" not in clean_answer` — 任何 tag 殘留都是 bug
-
----
-
-## 完整端到端範例
-
-假設 `data/sample.md` 內容如下：
-
-```markdown
-# Q1 Earnings
-
-公司去年營收成長 12%。雲端服務貢獻了過半的營收增長。
-
-毛利率維持在 38%，與去年同期持平。
-```
-
-執行：
+## 測試
 
 ```bash
-python scripts/ingest.py data/sample.md
-# Output:
-#   data/sample.md: 1 chunks
-# Total: 1 chunks ingested.
-
-python scripts/ask.py "毛利率變化如何？"
+pytest tests/unit -q                               # 純單元測試（LLM 全 mock）
+pytest tests/integration -q -m "not requires_ollama"  # 整合測試（不需 Ollama 的部分）
+bash scripts/regression.sh                         # 一次跑完上述兩者
+pytest tests/integration -q -m requires_ollama     # 需本機 Ollama 啟動時才跑
 ```
 
-中間發生的事（簡化示意）：
+- 所有 LLM 呼叫測試一律 **mock**，預設不打真 Ollama，可離線執行。
+- `conftest.py` 註冊 `requires_ollama` marker，標記需要本機 Ollama 實例的整合測試。
+- 涵蓋範圍：chunking、citation renumber、各 loader（docx / xlsx / html）、eval（support / entities）、history store，以及端到端 pipeline。
 
-1. **load**：得到 `Document(text="# Q1 Earnings\n\n公司去年營收成長 12%。雲端服務...毛利率維持在 38%，與去年同期持平。")`。
-2. **split**：得到 4 個 `Sentence`（標題、營收、雲端、毛利率）。
-3. **build_chunks**：總長度遠小於 800，所以 1 個 chunk 內含 4 句。
-4. **embed**：產生 `(1, 1024)` float32 vector，寫入 Milvus。
-5. **query** 時 question embed 後 search → 取回那 1 個 ChunkHit。
-6. **prompt** 渲染：
-   ```
-   [chunk_id=0] (from sample.md)
-     s0: # Q1 Earnings
-     s1: 公司去年營收成長 12%。
-     s2: 雲端服務貢獻了過半的營收增長。
-     s3: 毛利率維持在 38%，與去年同期持平。
-   ```
-7. **LLM 輸出**：
-   ```
-   <CIT c="0" s="3">毛利率維持在 38%，與去年同期持平</CIT>。
-   ```
-8. **parse_citations** 反查 `hits[0].sentences[3]`，組裝 `Citation(page=None, char_start=…, char_end=…, sentence_text="毛利率維持在 38%，與去年同期持平。")`。
-9. **CLI 輸出**：
-   ```
-   Answer:
-   毛利率維持在 38%，與去年同期持平 [1]。
+## 系統流程圖（技術版）
 
-   References:
-     [1] 毛利率維持在 38%，與去年同期持平
-         ← sample.md:page ? char[X:Y]
-           "毛利率維持在 38%，與去年同期持平。"
-   ```
+### 高層架構
 
----
+```mermaid
+flowchart LR
+    User([👤 User])
+    UI[Streamlit UI<br/>app.py]
 
-## Module Reference
+    subgraph Core["RAG Core (src/)"]
+        Ingest[Ingest Pipeline<br/>src/ingest.py]
+        Loaders[Loaders<br/>src/loaders/*]
+        Chunker[Chunker<br/>src/chunking.py]
+        Retriever[Retriever<br/>src/retrieval.py]
+        Chain[RAG Chain<br/>src/rag_chain.py]
+        Prompts[Prompts<br/>src/prompts.py]
+        LLMFactory[LLM Factory<br/>src/llm.py]
+        Citation[Citation Renumber<br/>src/citation.py]
+        Eval[Quality Eval<br/>src/eval/*]
+        History[(History Store<br/>src/history/*)]
+    end
 
-| Module | 主要 API | 不變式 / 注意事項 |
-|---|---|---|
-| `src/loaders.py` | `load_document(path) → Document` | PDF 才填 `pages`；空文件僅 warn 不 raise |
-| `src/splitter.py` | `split_sentences(doc) → list[Sentence]`<br>`build_chunks(doc, sents, target_chars=800, overlap_sentences=1) → list[Chunk]` | `doc.text[s.char_start:s.char_end] == s.text`<br>`Chunk.sentences` 不重編 sid |
-| `src/embedder.py` | `Embedder.embed(texts) → np.ndarray (N, 1024)` | 懶載入；輸出已 L2-normalized |
-| `src/vector_store.py` | `VectorStore.upsert(chunks, embeddings, source_paths)`<br>`VectorStore.search(q_emb, k) → list[ChunkHit]`<br>`VectorStore.reset()` | PK 確定性導出 → upsert idempotent；不同 dim 直接 raise |
-| `src/prompt.py` | `build_citation_messages(question, hits) → messages` | prompt 裡的 `chunk_id` 是 `hits` 的 list index |
-| `src/llm.py` | `LLMClient.chat(messages) → str` | OpenAI 相容；預設 `temperature=0.0` |
-| `src/citation_parser.py` | `parse_citations(raw, hits) → AnswerWithCitations` | 解析後 `<CIT>` 不能殘留；越界 tag 降級為純文字 |
-| `src/rag.py` | `RAG().ingest(paths)` / `RAG().query(question)` | 串聯所有上述模組；測試可直接注入 mock |
+    subgraph External["External Services"]
+        Ollama[/Ollama<br/>LLM + Embedding/]
+        Chroma[(ChromaDB<br/>data/chroma/)]
+        SQLite[(SQLite<br/>data/history.sqlite)]
+    end
 
-### 關鍵 dataclass 一覽
-
-```python
-PageSpan(page_num: int, char_start: int, char_end: int)
-Document(doc_id: str, source_path: str, text: str, pages: list[PageSpan] | None)
-Sentence(sid: int, text: str, char_start: int, char_end: int, page: int | None)
-Chunk(chunk_id: int, doc_id: str, text: str, char_start: int, char_end: int, sentences: list[Sentence])
-ChunkHit(chunk_id, doc_id, score, chunk_text, char_start, char_end,
-         sentences: list[dict], source_path, doc_title)
-Citation(ref_num, claim_text, chunk_id, sentence_ids,
-         source_path, doc_id, doc_title, page,
-         sentence_text, char_start, char_end)
-AnswerWithCitations(clean_answer: str, citations: list[Citation])
+    User <--> UI
+    UI -->|upload| Ingest
+    UI -->|question| Chain
+    Ingest --> Loaders --> Chunker --> Chroma
+    Chunker -->|embed| Ollama
+    Chain --> Retriever --> Chroma
+    Chain --> Prompts
+    Chain --> LLMFactory -->|LLM call| Ollama
+    Chain --> Citation
+    Chain --> Eval
+    UI <--> History --> SQLite
 ```
 
----
+### Ingest 流程（文件入庫）
 
-## Configuration
+```mermaid
+flowchart TD
+    A[User 上傳檔案<br/>app.py: render_doc_tab] --> B[ingest_paths paths<br/>src/ingest.py]
+    B --> C{副檔名分派<br/>src/loaders/__init__.py: load_file}
 
-`Config.from_env()` 從環境變數（或 `.env`）讀取設定：
+    C -->|.pdf| D1[load_pdf]
+    C -->|.docx| D2[docx_loader.load]
+    C -->|.xlsx| D3[xlsx_loader.load]
+    C -->|.html| D4[html_loader.load]
+    C -->|.md / .txt| D5[load_text]
 
-| Env | Default | 說明 |
-|---|---|---|
-| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | LLM endpoint（OpenAI 相容） |
-| `OLLAMA_MODEL` | `qwen2.5:7b` | LLM 模型名稱 |
-| `OLLAMA_API_KEY` | `ollama` | API key（Ollama 不檢查，雲端服務需填真值） |
-| `MILVUS_URI` | `./milvus.db` | Milvus Lite 檔案路徑或遠端 server URI |
-| `MILVUS_COLLECTION` | `tag_rag` | collection 名稱 |
-| `EMBEDDING_MODEL` | `BAAI/bge-m3` | embedder 模型 |
-| `EMBEDDING_DIM` | `1024` | 必須與 embedding 模型一致；不同 dim 會在 VectorStore 啟動時 raise |
-| `TOP_K` | `5` | retrieval 取回的 chunk 數 |
-
-> 想跑單元測試而**不**想下載模型？預設 `pytest` 已 monkeypatch 掉 Embedder / LLMClient，並用 Milvus Lite tmp file。
-
----
-
-## Testing
-
-```bash
-pytest                            # 預設 — 排除 slow，無需網路 / 無需下載模型
-pytest -m slow                    # 整合測試 — 真打 BGE-M3 + Ollama
-pytest tests/test_splitter.py -v  # 單一階段
-pytest tests/test_X.py::test_name # 單一 case
+    D1 & D2 & D3 & D4 & D5 --> E[list of Document<br/>含 source / page metadata]
+    E --> F[chunk_documents<br/>RecursiveCharacterTextSplitter<br/>size/overlap 由 CHUNK_SIZE/CHUNK_OVERLAP 設定<br/>預設 512/128]
+    F --> G[加入 stable metadata:<br/>doc_id = MD5 source first10<br/>chunk_index = 0..N<br/>page]
+    G --> H[vs.add_documents<br/>ids = doc_id:chunk_index]
+    H --> I[Ollama embedding<br/>bge-m3]
+    I --> J[(ChromaDB<br/>persist)]
+    J --> K[回傳 chunk 總數]
 ```
 
-`pytest.ini` 已設 `pythonpath = .`，故 `from src.xxx` 直接可用。
+關鍵：chunk_id 為 `{doc_id}:{chunk_index}` 穩定字串，重新 ingest 不會疊加且引用維持 stable ref。
 
-100+ unit tests 覆蓋：
+### Query / RAG 流程（提問 → 答案）
 
-- `test_loaders.py` — txt / md / html / PDF 載入、編碼、頁碼累積
-- `test_splitter.py` — 中英混排、abbrev 過濾、char-offset 不變式
-- `test_chunks.py` — `build_chunks` 的 target / overlap / 邊界
-- `test_embedder.py` — 模型 monkeypatch、L2-norm、空輸入
-- `test_vector_store.py` — Milvus Lite tmp file、upsert idempotent、dim mismatch
-- `test_prompt.py` — 重編號、page label、空 hits 渲染
-- `test_llm.py` — OpenAI SDK 呼叫格式、temperature
-- `test_citation_parser.py` — single / range / list / 越界 / 顛倒順序 / tag 殘留
-- `test_pipeline.py` — `RAG.ingest` + `RAG.query` 全鏈整合
-- `test_cli.py` — `scripts/` 入口參數與輸出格式
+```mermaid
+flowchart TD
+    Q[User 輸入問題<br/>app.py: render_chat_tab] --> R[query question<br/>src/rag_chain.py]
 
----
+    R --> S[retrieve question, k=5<br/>src/retrieval.py]
+    S --> S1[(ChromaDB<br/>similarity_search<br/>with_relevance_scores)]
+    S1 --> S2[list of RetrievedChunk<br/>n=1..k, chunk_id, text,<br/>source, page, score]
 
-## LLM / Embedding / Vector Store Swap
+    S2 --> T[Prompt 組裝<br/>src/prompts.py<br/>_BLOCK_TEMPLATE per chunk<br/>_USER_TEMPLATE 包含 context + question]
+    T --> U[LLM 呼叫<br/>src/llm.py: _get_llm<br/>Ollama LLM（LLM_MODEL，預設 gemma4:e4b）]
+    U --> V[原始 answer<br/>含 inline n 標記<br/>可能含 fabricated n]
 
-**換 LLM**（vLLM / OpenAI / Anthropic compatible）：
+    V --> W[renumber_and_filter<br/>src/citation.py]
+    W --> W1{regex 掃描 n}
+    W1 -->|n in retrieved| W2[依首次出現順序 remap]
+    W1 -->|n 超出範圍| W3[移除 fabricated 標記]
+    W2 & W3 --> X[最終 answer<br/>標記改為 1..M 連號]
 
-```python
-from src.rag import RAG
-from src.llm import LLMClient
+    X --> Y[RagAnswer<br/>answer + citations + retrieved]
 
-rag = RAG(llm=LLMClient(
-    base_url="http://your-vllm-server:8000/v1",
-    api_key="your-key",
-    model="meta-llama/Llama-3.1-70B-Instruct",
-))
+    Y --> Z1[render markdown + citations<br/>app.py: render_citations]
+    Y --> Z2[evaluate ans<br/>src/eval]
+    Y --> Z3[HistoryStore.add_message<br/>persist 到 SQLite]
+
+    Z2 --> Z2a[QualityReport<br/>sentence support + hallucination]
+    Z3 --> Z3a[(SQLite)]
 ```
 
-**換 Embedder**（只要實作 `embed(list[str]) → (N, dim) np.ndarray` 即可）：
+範例：LLM 產出 `[2][4][2][99]` → filter 後 `[1][2][1]`，citations 依新順序排列、`.n` 欄位更新。
 
-```python
-class MyEmbedder:
-    dim = 768
-    def embed(self, texts):
-        ...
+### 對話歷史 & 引用渲染
 
-rag = RAG(embedder=MyEmbedder(), ...)
-# VectorStore 的 dim 也必須對應
+```mermaid
+flowchart LR
+    subgraph Save["儲存（query 後）"]
+        A1[RagAnswer.citations] --> A2[StoredCitation<br/>chunk_id / display_n / score /<br/>snapshot_text 截斷 1000 chars]
+        A2 --> A3[HistoryStore.add_message<br/>JSON 序列化]
+        A3 --> A4[(messages 資料表)]
+    end
+
+    subgraph Load["載入（切換對話）"]
+        B1[User 點選 conversation] --> B2[load_conversation conv_id]
+        B2 --> B3[反序列化 messages + citations]
+        B3 --> B4[render_citations]
+    end
+
+    subgraph Render["引用渲染（每條 citation）"]
+        C1[citation.chunk_id] --> C2[fetch_chunks_by_ids]
+        C2 --> C3{chunk 仍在 Chroma?}
+        C3 -->|是| C4[顯示 live text + 完整 metadata]
+        C3 -->|否 stale| C5[fallback 顯示 snapshot_text]
+        C4 & C5 --> C6[format:<br/>n source · page · chunk_index · score]
+    end
+
+    B4 --> Render
 ```
 
-**換 Vector Store**（遠端 Milvus Server）：
+## 設計重點
 
-```bash
-export MILVUS_URI=http://milvus.example.com:19530
-```
+- **Chunk 級 citation**：每個 retrieved chunk = 1 個 citable unit（仿 Anthropic custom-content）
+- **Context-assembly 階段建好編號↔chunk 映射**（仿 Perplexity），非生成後 retrofit
+- **Prompt-based `[n]` marker**（仿 LlamaIndex CitationQueryEngine），regex 解析後過濾編造編號
+- **Deterministic chunk id**：同檔案重複 ingest 不會疊加（`{doc_id}:{chunk_index}`）
+- **本地優先**：完全跑在本機，無需任何雲端 API key
 
----
+## 已知限制（Tier 2）
 
-## Limitations
+- 無 streaming 支援（全部答案生成完再展示）
+- 無多使用者隔離（共用同一向量庫與對話庫）
+- 要刪向量庫請手動 `rm -rf data/chroma/`；要清空對話請刪除 `data/history.sqlite`
 
-| 不做 | 為什麼 / 替代方案 |
-|---|---|
-| OCR 掃描 PDF | pypdf 沒有文字層時 warn 並跳過。需 OCR 請先 Tesseract / Adobe → 文字層 PDF / txt |
-| Word / PPT 直讀 | 請外部轉成 txt / PDF（pandoc、libreoffice） |
-| Hybrid retrieval (BM25+dense) | 目前 dense-only。Milvus 2.4 已有 hybrid，後續可加 |
-| Multi-turn 對話歷史 | 每次 query 是獨立的；要做請在 caller 端拼 history |
-| 前端 UI | CLI only |
-| 強制 `<CIT>` 格式遵循 | 8B 等級本機模型對格式遵循度不如 GPT-4 / Claude，輸出飄掉時：①升級到更大模型，或 ②換 Anthropic Citations API |
-
----
-
-## Project Layout
+## 結構
 
 ```
-specs/                       # Spec Guardian — 各階段行為契約（spec → tests → impl）
-  phase_0_skeleton.md          # 專案骨架
-  phase_1_loaders.md           # txt / md / html / PDF
-  phase_2_splitter.md          # 中英混排 sentence + abbrev
-  phase_3_embedding.md         # BGE-M3 + chunk
-  phase_4_vector_store.md      # Milvus Lite + PK + metadata
-  phase_5_llm_prompt.md        # prompt 渲染 + LLM client
-  phase_6_citation_parser.md   # <CIT> 解析 + 反查
-  phase_7_pipeline.md          # RAG 串接
-  phase_8_release.md           # 文件與發布
-src/                         # 實作
-  loaders.py splitter.py embedder.py vector_store.py
-  prompt.py llm.py citation_parser.py rag.py config.py
-scripts/                     # CLI
-  ingest.py  ask.py
-tests/                       # 100+ unit tests + 1 integration suite
-data/                        # 範例文件（自行放置）
+.
+├── pyproject.toml
+├── .env.example
+├── CLAUDE.md            # 專案指南（給 Claude / teammate）
+├── conftest.py          # pytest 設定（註冊 requires_ollama marker）
+├── rag.py               # Tier 1 façade（re-export src.*）
+├── app.py               # Streamlit UI
+├── src/
+│   ├── config.py        # 環境變數與設定（Pydantic Settings）
+│   ├── logging_setup.py # logging 設定，noisy lib 壓到 WARNING
+│   ├── ingest.py        # 檔案入庫 pipeline
+│   ├── chunking.py      # RecursiveCharacterTextSplitter 切段
+│   ├── llm.py           # LLM factory（指向 Ollama 的 ChatOpenAI）
+│   ├── prompts.py       # SYSTEM_PROMPT / _USER_TEMPLATE / _BLOCK_TEMPLATE
+│   ├── rag_chain.py     # RAG query chain
+│   ├── citation.py      # inline [n] 引用重新編號與過濾
+│   ├── retrieval.py     # 向量檢索與 chunk 管理
+│   ├── vectorstore.py   # ChromaDB 操作層
+│   ├── loaders/         # PDF / DOCX / XLSX / HTML / Text 載入器
+│   ├── history/         # SQLite 對話持久化與管理
+│   └── eval/            # 品質評估 & hallucination 偵測
+├── tests/
+│   ├── unit/            # 單元測試（chunking / citation / loaders / eval / history）
+│   ├── integration/     # 端到端 pipeline 測試
+│   └── fixtures/        # 測試用文件與 snapshot
+├── scripts/
+│   └── regression.sh    # 一次跑完 unit + 非 Ollama 整合測試
+├── specs/               # SDD 規格與 contracts
+└── data/
+    ├── docs/            # 來源檔（含 demo.md）
+    ├── chroma/          # Chroma persistent dir（git ignore）
+    └── history.sqlite   # 對話歷史（git ignore）
 ```
-
-開發採 **Spec-Driven Development**：每階段循環 `spec → tests (red) → impl (green) → 驗收`。修改任何模組前請先閱讀 `specs/phase_*.md` — spec 是行為的唯一真實來源。

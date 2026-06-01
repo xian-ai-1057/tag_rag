@@ -1,5 +1,0 @@
-Hello world. This is a plain text fixture used for loader unit tests.
-
-這是一段中文段落，用來測試 UTF-8 解碼以及多語言混合內容是否能被正確讀取。
-
-The quick brown fox jumps over the lazy dog. 第二段中文，包含標點符號、數字 123 與英文字 mixed together。

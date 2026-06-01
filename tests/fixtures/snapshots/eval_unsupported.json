@@ -1,0 +1,24 @@
+{
+  "quality_score": 0.5,
+  "sentence_supports": [
+    {
+      "sentence": "台新銀行 2024 年信用卡發卡量 300 萬張 [1]。",
+      "supported": true,
+      "best_match_context_id": "8aa4cfc11c:2",
+      "overlap_score": 0.3846
+    },
+    {
+      "sentence": "同年營收達 100 億元 [1]。",
+      "supported": false,
+      "best_match_context_id": null,
+      "overlap_score": 0.05
+    }
+  ],
+  "unsupported_entities": [
+    {
+      "entity": "100 億",
+      "kind": "num",
+      "reason": "not found in any cited chunk text"
+    }
+  ]
+}
