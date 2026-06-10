@@ -96,7 +96,8 @@ pytest tests/integration     # 整合（test_pipeline_smoke_with_ollama 需 Olla
 | [src/rag_chain.py](src/rag_chain.py) | `query()` 雙路徑 orchestrator（本地檢索 / arrkb 注入）+ citation renumbering |
 | [src/retrieval.py](src/retrieval.py) | 向量檢索 + arrkb schema（`RerankedChunk` / `RetrievedChunk`）正規化 |
 | [src/citation.py](src/citation.py) | `renumber_and_filter` — 只留實際引用的 chunk 並重編號 |
-| [src/vectorstore.py](src/vectorstore.py) | ChromaDB 操作層 |
+| [src/vectorstore.py](src/vectorstore.py) | ChromaDB 操作層（client 以 settings 值 lru_cache） |
+| [src/utils.py](src/utils.py) | 跨模組共用 helper（`CITE_RE` / `preview`） |
 | [specs/](specs/) | SDD 規格與 contracts |
 | [tests/](tests/) — pytest 單元與整合測試 |
 | [data/docs/](data/docs/) | 來源文件（含 demo.md） |

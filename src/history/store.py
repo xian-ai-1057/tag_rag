@@ -57,6 +57,7 @@ class HistoryStore:
     @contextmanager
     def _conn(self):
         conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
         try:
             conn.execute("PRAGMA foreign_keys = ON;")
             yield conn
@@ -123,7 +124,7 @@ class HistoryStore:
                 "SELECT id, title, created_at FROM conversations ORDER BY created_at DESC"
             ).fetchall()
         return [
-            Conversation(id=r[0], title=r[1], created_at=_parse_dt(r[2]))
+            Conversation(id=r["id"], title=r["title"], created_at=_parse_dt(r["created_at"]))
             for r in rows
         ]
 
@@ -135,7 +136,9 @@ class HistoryStore:
             ).fetchone()
             if row is None:
                 raise KeyError(conv_id)
-            conv = Conversation(id=row[0], title=row[1], created_at=_parse_dt(row[2]))
+            conv = Conversation(
+                id=row["id"], title=row["title"], created_at=_parse_dt(row["created_at"])
+            )
             msg_rows = conn.execute(
                 "SELECT id, conv_id, role, content, citations_json, created_at"
                 " FROM messages WHERE conv_id = ? ORDER BY id ASC",
@@ -143,12 +146,12 @@ class HistoryStore:
             ).fetchall()
         messages = [
             Message(
-                id=r[0],
-                conv_id=r[1],
-                role=MessageRole(r[2]),
-                content=r[3],
-                citations=[StoredCitation.model_validate(c) for c in json.loads(r[4])],
-                created_at=_parse_dt(r[5]),
+                id=r["id"],
+                conv_id=r["conv_id"],
+                role=MessageRole(r["role"]),
+                content=r["content"],
+                citations=[StoredCitation.model_validate(c) for c in json.loads(r["citations_json"])],
+                created_at=_parse_dt(r["created_at"]),
             )
             for r in msg_rows
         ]

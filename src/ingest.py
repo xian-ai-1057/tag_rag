@@ -31,5 +31,5 @@ def ingest_paths(paths: list[str]) -> int:
     log.info("[ingest_paths] embedding & upserting %d chunks (ids sample: %s%s)",
              len(chunks), ids[:3], "…" if len(ids) > 3 else "")
     vs.add_documents(chunks, ids=ids)
-    log.info("[ingest_paths] done. collection now has %d entries", vs._collection.count())
+    log.info("[ingest_paths] done. upserted %d chunks", len(chunks))
     return len(chunks)

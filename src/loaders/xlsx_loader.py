@@ -9,6 +9,10 @@ log = logging.getLogger("rag")
 _BLOCK_SIZE = 50
 
 
+def _format_row(row: tuple) -> str:
+    return "\t".join("" if c is None else str(c) for c in row)
+
+
 def load(path: Path) -> list[Document]:
     try:
         import openpyxl
@@ -24,14 +28,8 @@ def load(path: Path) -> list[Document]:
 
     for sheet in wb.worksheets:
         rows = list(sheet.iter_rows(values_only=True))
-
-        if not rows:
-            continue
-
-        header = rows[0]
-        data_rows = rows[1:]
-
-        if not data_rows:
+        header, data_rows = rows[:1], rows[1:]
+        if not header or not data_rows:
             continue
 
         total_rows = len(data_rows)
@@ -42,28 +40,19 @@ def load(path: Path) -> list[Document]:
             )
 
         filename = f"{path.name}#{sheet.title}"
-        header_line = "\t".join(str(c) if c is not None else "" for c in header)
+        header_line = _format_row(header[0])
 
         for block_start in range(0, total_rows, _BLOCK_SIZE):
             block = data_rows[block_start: block_start + _BLOCK_SIZE]
-            block_end = block_start + len(block)
-
-            row_start_1idx = block_start + 1
-            row_end_1idx = block_end
-
-            body_lines = "\n".join(
-                "\t".join(str(c) if c is not None else "" for c in row)
-                for row in block
-            )
-            text = header_line + "\n" + body_lines
+            body_lines = "\n".join(_format_row(row) for row in block)
 
             docs.append(Document(
-                page_content=text,
+                page_content=header_line + "\n" + body_lines,
                 metadata={
                     "filename": filename,
                     "page": 0,
                     "sheet": sheet.title,
-                    "row_range": f"{row_start_1idx}-{row_end_1idx}",
+                    "row_range": f"{block_start + 1}-{block_start + len(block)}",
                 },
             ))
 

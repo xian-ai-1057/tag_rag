@@ -1,16 +1,17 @@
 """Streamlit UI: sidebar + multi-format upload + chat history + quality eval."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import streamlit as st
 
 from src.config import settings
-from src.eval import QualityReport, SentenceSupport, EntityFlag, evaluate
-from src.history import HistoryStore, Conversation, Message, MessageRole, StoredCitation
+from src.eval import QualityReport, evaluate
+from src.history import HistoryStore, MessageRole, StoredCitation
 from src.ingest import ingest_paths
 from src.loaders import SUPPORTED_EXTS
-from src.rag_chain import query, RagAnswer
+from src.rag_chain import query
 from src.retrieval import RetrievedChunk
 from src.vectorstore import fetch_chunks_by_ids, list_sources
 
@@ -18,6 +19,9 @@ st.set_page_config(page_title="Tag RAG", layout="wide")
 
 DATA_DIR = Path("data/docs")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+_SNIPPET_CHARS = 500
+_AUTO_TITLE_CHARS = 30
 
 # ---------------------------------------------------------------------------
 # session_state init
@@ -46,7 +50,7 @@ def _store() -> HistoryStore:
 
 def _switch_conversation(conv_id: str) -> None:
     store = _store()
-    conv, msgs = store.load_conversation(conv_id)
+    _, msgs = store.load_conversation(conv_id)
     st.session_state.current_conv_id = conv_id
     st.session_state.pending_rename = False
     st.session_state.messages = [
@@ -87,33 +91,61 @@ def _format_source(s: str) -> str:
     return s
 
 
-def render_citations(citations: list) -> None:
+def _render_source_list() -> bool:
+    """列出已入庫文件；知識庫為空時回傳 False（空狀態提示由呼叫端決定）。"""
+    sources = list_sources()
+    for s in sources:
+        st.write(f"• {_format_source(s)}")
+    return bool(sources)
+
+
+@dataclass
+class _CitationView:
+    """單筆引用的顯示欄位 — 把 RetrievedChunk（live）與 StoredCitation（歷史）
+    兩種來源正規化成同一形狀，render 迴圈只管排版。"""
+
+    display_n: int | str
+    text: str
+    filename: str
+    page: int
+    chunk_index: int
+    score: float
+    context_id: str
+    stale: bool
+
+
+def _citation_view(c: RetrievedChunk | StoredCitation, live: dict[str, dict]) -> _CitationView:
+    entry = live.get(c.context_id, {})
+    md = entry.get("metadata") or {}
+    snapshot = getattr(c, "content", None) or getattr(c, "snapshot_text", "")
+    return _CitationView(
+        display_n=getattr(c, "n", None) or getattr(c, "display_n", "?"),
+        text=entry.get("text") or snapshot,
+        filename=md.get("filename") or getattr(c, "filename", "?"),
+        page=int(md.get("page") or getattr(c, "page", 0) or 0),
+        chunk_index=int(md.get("chunk_index") or getattr(c, "chunk_index", 0) or 0),
+        score=getattr(c, "score", 0.0),
+        context_id=c.context_id,
+        stale=c.context_id not in live,
+    )
+
+
+def render_citations(citations: list[RetrievedChunk | StoredCitation]) -> None:
     if not citations:
         st.caption("（本次回答未引用任何 source）")
         return
-    context_ids = [c.context_id for c in citations]
-    live = fetch_chunks_by_ids(context_ids)
+    live = fetch_chunks_by_ids([c.context_id for c in citations])
     with st.expander(f"📚 引用來源（{len(citations)} 筆）", expanded=False):
         for c in citations:
-            entry = live.get(c.context_id, {})
-            md = entry.get("metadata") or {}
-            # RetrievedChunk has .content; StoredCitation has .snapshot_text
-            fallback_text = getattr(c, "content", None) or getattr(c, "snapshot_text", "")
-            text = entry.get("text") or fallback_text
-            filename = md.get("filename") or getattr(c, "filename", "?")
-            page = int(md.get("page") or getattr(c, "page", 0) or 0)
-            chunk_index = int(md.get("chunk_index") or getattr(c, "chunk_index", 0) or 0)
-            display_n = getattr(c, "n", None) or getattr(c, "display_n", "?")
-            score = getattr(c, "score", 0.0)
-            stale = c.context_id not in live
-            stale_tag = " · ⚠️ 文件已更新或被刪除（顯示為快照）" if stale else ""
+            v = _citation_view(c, live)
+            stale_tag = " · ⚠️ 文件已更新或被刪除（顯示為快照）" if v.stale else ""
             st.markdown(
-                f"**[{display_n}]** `{_format_source(filename)}` · 第 {page} 頁 · "
-                f"第 {chunk_index} 段 · score={score:.3f}"
-                f" · `id={c.context_id}`{stale_tag}"
+                f"**[{v.display_n}]** `{_format_source(v.filename)}` · 第 {v.page} 頁 · "
+                f"第 {v.chunk_index} 段 · score={v.score:.3f}"
+                f" · `id={v.context_id}`{stale_tag}"
             )
-            preview = text[:500] + ("…" if len(text) > 500 else "")
-            st.code(preview, language=None)
+            snippet = v.text[:_SNIPPET_CHARS] + ("…" if len(v.text) > _SNIPPET_CHARS else "")
+            st.code(snippet, language=None)
             st.divider()
 
 
@@ -202,12 +234,8 @@ def render_sidebar() -> None:
 
         st.divider()
         st.subheader("📂 已入庫文件")
-        sources = list_sources()
-        if not sources:
+        if not _render_source_list():
             st.caption("尚未入庫任何文件。")
-        else:
-            for s in sources:
-                st.write(f"• {_format_source(s)}")
 
 
 # ---------------------------------------------------------------------------
@@ -234,12 +262,8 @@ def render_doc_tab() -> None:
 
     st.divider()
     st.subheader("已入庫文件")
-    sources = list_sources()
-    if not sources:
+    if not _render_source_list():
         st.info("尚未有文件，請先在上方上傳。")
-    else:
-        for s in sources:
-            st.write(f"• {_format_source(s)}")
 
 
 # ---------------------------------------------------------------------------
@@ -255,30 +279,23 @@ def render_chat_tab() -> None:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
             if m["role"] == "assistant":
-                cites = m.get("citations") or []
-                render_citations(cites)
+                render_citations(m.get("citations") or [])
+                if m.get("report"):
+                    render_quality_report(m["report"])
 
     if q := st.chat_input("問點什麼…"):
         store = _store()
         conv_id = st.session_state.current_conv_id
 
-        # user message
         store.add_message(conv_id, MessageRole.USER, q)
         st.session_state.messages.append({"role": "user", "content": q, "citations": []})
         with st.chat_message("user"):
             st.markdown(q)
 
-        # query + eval
-        with st.chat_message("assistant"):
-            with st.spinner("檢索中…"):
-                ans = query(q)
-            st.markdown(ans.answer)
-            render_citations(ans.citations)
-            if ans.retrieved:
-                report = evaluate(ans)
-                render_quality_report(report)
+        with st.chat_message("assistant"), st.spinner("檢索中…"):
+            ans = query(q)
+            report = evaluate(ans) if ans.retrieved else None
 
-        # persist assistant message
         stored_citations = [
             StoredCitation(
                 context_id=c.context_id,
@@ -289,15 +306,17 @@ def render_chat_tab() -> None:
             for c in ans.citations
         ]
         store.add_message(conv_id, MessageRole.ASSISTANT, ans.answer, citations=stored_citations)
+        # report 僅存 session（重整即消失），SQLite schema 不變
         st.session_state.messages.append({
             "role": "assistant",
             "content": ans.answer,
             "citations": ans.citations,
+            "report": report,
         })
 
         # auto rename on first message
         if st.session_state.pending_rename:
-            store.rename_conversation(conv_id, q[:30])
+            store.rename_conversation(conv_id, q[:_AUTO_TITLE_CHARS])
             st.session_state.pending_rename = False
 
         st.rerun()

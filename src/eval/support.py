@@ -4,13 +4,13 @@ from __future__ import annotations
 import re
 
 from src.eval.report import SentenceSupport
+from src.utils import CITE_RE
 
 SUPPORT_OVERLAP_THRESHOLD = 0.15
 NGRAM_SIZE = 3
 
 _CN_TERMINATORS = "。！？"
 _SENT_SPLIT_RE = re.compile(rf"(?<=[{_CN_TERMINATORS}])|\n+|(?<=[.!?])\s+")
-_CITE_RE = re.compile(r"\[(\d+)\]")
 
 
 def split_sentences(text: str) -> list[str]:
@@ -26,17 +26,19 @@ def _char_ngram_set(text: str, n: int = NGRAM_SIZE) -> set[str]:
     return {text[i : i + n] for i in range(len(text) - n + 1)}
 
 
-def char_3gram_overlap(a: str, b: str) -> float:
-    """Jaccard-style coverage of `a`'s 3-grams found in `b` (|A∩B| / |A|)."""
-    sa = _char_ngram_set(a)
+def _overlap(sa: set[str], b: str) -> float:
     if not sa:
         return 0.0
-    sb = _char_ngram_set(b)
-    return len(sa & sb) / len(sa)
+    return len(sa & _char_ngram_set(b)) / len(sa)
+
+
+def char_3gram_overlap(a: str, b: str) -> float:
+    """Jaccard-style coverage of `a`'s 3-grams found in `b` (|A∩B| / |A|)."""
+    return _overlap(_char_ngram_set(a), b)
 
 
 def _strip_markers(sentence: str) -> str:
-    return _CITE_RE.sub("", sentence).strip()
+    return CITE_RE.sub("", sentence).strip()
 
 
 def evaluate_sentence_support(
@@ -53,13 +55,14 @@ def evaluate_sentence_support(
             best_match_context_id=None,
             overlap_score=0.0,
         )
+    sentence_ngrams = _char_ngram_set(stripped)
     best_id: str | None = None
     best_score = 0.0
     for cid in cited_context_ids:
         ctext = chunk_text_by_id.get(cid)
         if not ctext:
             continue
-        score = char_3gram_overlap(stripped, ctext)
+        score = _overlap(sentence_ngrams, ctext)
         if score > best_score:
             best_score = score
             best_id = cid
@@ -73,9 +76,4 @@ def evaluate_sentence_support(
 
 
 def extract_cited_ns(sentence: str) -> list[int]:
-    seen: list[int] = []
-    for m in _CITE_RE.finditer(sentence):
-        n = int(m.group(1))
-        if n not in seen:
-            seen.append(n)
-    return seen
+    return list(dict.fromkeys(int(m.group(1)) for m in CITE_RE.finditer(sentence)))
