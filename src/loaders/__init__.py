@@ -12,6 +12,8 @@ log = logging.getLogger("rag")
 
 SUPPORTED_EXTS = (".pdf", ".md", ".txt", ".docx", ".xlsx", ".html", ".htm")
 
+__all__ = ["SUPPORTED_EXTS", "load_file"]
+
 
 def load_file(path: str | Path) -> list[Document]:
     p = Path(path)
@@ -37,7 +39,7 @@ def load_file(path: str | Path) -> list[Document]:
         # filename and drop "source" so the stored schema matches the Milvus shape.
         d.metadata.setdefault("filename", p.name)
         d.metadata.pop("source", None)
-        d.metadata.setdefault("page", d.metadata.get("page", 0))
+        d.metadata.setdefault("page", 0)
     log.info("[load_file] %s → %d document(s), total %d chars",
              p.name, len(docs), sum(len(d.page_content) for d in docs))
     return docs

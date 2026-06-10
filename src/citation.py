@@ -3,10 +3,11 @@ import logging
 import re
 
 from src.retrieval import RetrievedChunk
+from src.utils import CITE_RE
 
 log = logging.getLogger("rag")
 
-_CITE_RE = re.compile(r"\[(\d+)\]")
+_MULTI_SPACE_RE = re.compile(r" {2,}")
 
 
 def renumber_and_filter(
@@ -25,7 +26,7 @@ def renumber_and_filter(
     valid_ns = {c.n for c in retrieved}
     seen_order: list[int] = []
     fabricated: set[int] = set()
-    for m in _CITE_RE.finditer(answer):
+    for m in CITE_RE.finditer(answer):
         n = int(m.group(1))
         if n in valid_ns:
             if n not in seen_order:
@@ -39,8 +40,8 @@ def renumber_and_filter(
         n = int(m.group(1))
         return f"[{remap[n]}]" if n in remap else ""
 
-    new_answer = _CITE_RE.sub(_sub, answer)
-    new_answer = re.sub(r" {2,}", " ", new_answer)
+    new_answer = CITE_RE.sub(_sub, answer)
+    new_answer = _MULTI_SPACE_RE.sub(" ", new_answer)
 
     chunk_by_old_n = {c.n: c for c in retrieved}
     new_citations = [

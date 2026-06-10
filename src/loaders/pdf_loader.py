@@ -6,5 +6,4 @@ from langchain_core.documents import Document
 
 
 def load_pdf(path: Path) -> list[Document]:
-    docs = PyPDFLoader(str(path)).load()
-    return docs
+    return PyPDFLoader(str(path)).load()

@@ -4,6 +4,7 @@ import logging
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.config import settings
+from src.utils import preview
 from src.vectorstore import get_vectorstore
 
 log = logging.getLogger("rag")
@@ -74,18 +75,12 @@ def to_retrieved_chunk(r: RerankedChunk, n: int) -> RetrievedChunk:
     )
 
 
-def _preview(text: str, n: int = 80) -> str:
-    t = text.replace("\n", "⏎ ").strip()
-    return t if len(t) <= n else t[:n] + "…"
-
-
 def retrieve(question: str, k: int | None = None) -> list[RerankedChunk]:
     """本地檢索，輸出對齊外部 RAG 的 arrkb schema（模擬 production RAG 輸出）。"""
     k = k or settings.top_k
     log.info("[retrieve] question=%r k=%d", question, k)
     vs = get_vectorstore()
     results = vs.similarity_search_with_relevance_scores(question, k=k)
-    print("\n===\n raw Chroma results:", results, "\n===\n")
     chunks = [
         RerankedChunk(
             context_id=doc.metadata.get("context_id", "?"),
@@ -102,5 +97,5 @@ def retrieve(question: str, k: int | None = None) -> list[RerankedChunk]:
     log.info("[retrieve] got %d chunks", len(chunks))
     for i, c in enumerate(chunks, start=1):
         log.info("  [%d] id=%s relevance=%.3f filename=%s page=%s | %s",
-                 i, c.context_id, c.kwargs.relevance_score, c.filename, c.page, _preview(c.content))
+                 i, c.context_id, c.kwargs.relevance_score, c.filename, c.page, preview(c.content))
     return chunks

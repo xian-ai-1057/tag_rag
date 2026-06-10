@@ -6,5 +6,4 @@ from langchain_core.documents import Document
 
 
 def load_text(path: Path) -> list[Document]:
-    docs = TextLoader(str(path), encoding="utf-8").load()
-    return docs
+    return TextLoader(str(path), encoding="utf-8").load()

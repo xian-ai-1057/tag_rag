@@ -191,7 +191,7 @@ flowchart TD
     S --> S1[(ChromaDB<br/>similarity_search<br/>with_relevance_scores)]
     S1 --> S2[list of RetrievedChunk<br/>n=1..k, chunk_id, text,<br/>source, page, score]
 
-    S2 --> T[Prompt 組裝<br/>src/prompts.py<br/>_BLOCK_TEMPLATE per chunk<br/>_USER_TEMPLATE 包含 context + question]
+    S2 --> T[Prompt 組裝<br/>src/prompts.py: build_user_message<br/>_BLOCK_TEMPLATE per chunk<br/>_USER_TEMPLATE 包含 context + question]
     T --> U[LLM 呼叫<br/>src/llm.py: _get_llm<br/>Ollama LLM（LLM_MODEL，預設 gemma4:e4b）]
     U --> V[原始 answer<br/>含 inline n 標記<br/>可能含 fabricated n]
 
@@ -270,11 +270,12 @@ flowchart LR
 │   ├── ingest.py        # 檔案入庫 pipeline
 │   ├── chunking.py      # RecursiveCharacterTextSplitter 切段
 │   ├── llm.py           # LLM factory（指向 Ollama 的 ChatOpenAI）
-│   ├── prompts.py       # SYSTEM_PROMPT / _USER_TEMPLATE / _BLOCK_TEMPLATE
+│   ├── prompts.py       # SYSTEM_PROMPT / templates / build_user_message
 │   ├── rag_chain.py     # RAG query chain
 │   ├── citation.py      # inline [n] 引用重新編號與過濾
 │   ├── retrieval.py     # 向量檢索與 chunk 管理
-│   ├── vectorstore.py   # ChromaDB 操作層
+│   ├── vectorstore.py   # ChromaDB 操作層（client 以 settings 值快取）
+│   ├── utils.py         # 跨模組共用：CITE_RE / preview
 │   ├── loaders/         # PDF / DOCX / XLSX / HTML / Text 載入器
 │   ├── history/         # SQLite 對話持久化與管理
 │   └── eval/            # 品質評估 & hallucination 偵測

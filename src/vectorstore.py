@@ -1,5 +1,11 @@
-"""Chroma vectorstore helpers: get_vectorstore, list_sources, fetch_chunks_by_ids."""
+"""Chroma vectorstore helpers: get_vectorstore, list_sources, fetch_chunks_by_ids.
+
+Clients are lru_cache'd keyed on the current settings values, so Streamlit
+reruns and repeated queries reuse one Chroma client / embeddings instance,
+while tests that repoint settings (e.g. chroma_dir → tmpdir) get a fresh one.
+"""
 import logging
+from functools import lru_cache
 
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
@@ -9,21 +15,35 @@ from src.config import settings
 log = logging.getLogger("rag")
 
 
-def _get_embeddings() -> OpenAIEmbeddings:
+@lru_cache(maxsize=4)
+def _embeddings_for(model: str, base_url: str, api_key: str) -> OpenAIEmbeddings:
     return OpenAIEmbeddings(
-        model=settings.embed_model,
-        base_url=settings.ollama_base_url,
-        api_key=settings.ollama_api_key,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
         check_embedding_ctx_length=False,
     )
 
 
-def get_vectorstore() -> Chroma:
+@lru_cache(maxsize=4)
+def _vectorstore_for(
+    collection: str, persist_dir: str, embed_model: str, base_url: str, api_key: str
+) -> Chroma:
     return Chroma(
-        collection_name=settings.chroma_collection,
-        embedding_function=_get_embeddings(),
-        persist_directory=settings.chroma_dir,
+        collection_name=collection,
+        embedding_function=_embeddings_for(embed_model, base_url, api_key),
+        persist_directory=persist_dir,
         collection_metadata={"hnsw:space": "cosine"},
+    )
+
+
+def get_vectorstore() -> Chroma:
+    return _vectorstore_for(
+        settings.chroma_collection,
+        settings.chroma_dir,
+        settings.embed_model,
+        settings.ollama_base_url,
+        settings.ollama_api_key,
     )
 
 

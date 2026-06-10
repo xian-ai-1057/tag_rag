@@ -18,6 +18,16 @@ def _extract_section(root) -> str | None:
     return None
 
 
+def _make_doc(path: Path, root) -> Document | None:
+    text = root.get_text(separator="\n", strip=True)
+    if not text:
+        return None
+    return Document(
+        page_content=text,
+        metadata={"filename": path.name, "page": 0, "section": _extract_section(root)},
+    )
+
+
 def load(path: Path) -> list[Document]:
     try:
         from bs4 import BeautifulSoup
@@ -39,45 +49,16 @@ def load(path: Path) -> list[Document]:
         for tag in soup.find_all(tag_name):
             tag.decompose()
 
-    main_el = soup.find("main")
-    if main_el:
-        root = main_el
-    else:
-        article_el = soup.find("article")
-        if article_el:
-            root = article_el
-        else:
-            root = soup.find("body") or soup
+    root = soup.find("main") or soup.find("article") or soup.find("body") or soup
 
     docs: list[Document] = []
-
     if root.name == "body":
         articles = root.find_all("article")
         if len(articles) > 1:
-            for article in articles:
-                text = article.get_text(separator="\n", strip=True)
-                if not text:
-                    continue
-                docs.append(Document(
-                    page_content=text,
-                    metadata={
-                        "filename": path.name,
-                        "page": 0,
-                        "section": _extract_section(article),
-                    },
-                ))
+            docs = [doc for a in articles if (doc := _make_doc(path, a)) is not None]
 
-    if not docs:
-        text = root.get_text(separator="\n", strip=True)
-        if text:
-            docs.append(Document(
-                page_content=text,
-                metadata={
-                    "filename": path.name,
-                    "page": 0,
-                    "section": _extract_section(root),
-                },
-            ))
+    if not docs and (doc := _make_doc(path, root)) is not None:
+        docs = [doc]
 
     log.info("[html_loader] %s → %d document(s)", path.name, len(docs))
     return docs

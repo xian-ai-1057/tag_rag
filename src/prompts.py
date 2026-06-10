@@ -1,4 +1,5 @@
-"""Prompt string constants — byte-identical to Tier 1 rag.py."""
+"""Prompt strings（byte-identical to Tier 1 rag.py）+ user message 組裝。"""
+from src.retrieval import RetrievedChunk
 
 SYSTEM_PROMPT = """你是一個嚴謹的問答助理。你會收到使用者問題與多段【參考資料】，每段以 [n] 編號標示。
 
@@ -19,3 +20,11 @@ _USER_TEMPLATE = """【參考資料】
 【回答】"""
 
 _BLOCK_TEMPLATE = "[{n}] 來源: {filename}（第 {page} 頁）\n{content}\n"
+
+
+def build_user_message(chunks: list[RetrievedChunk], question: str) -> str:
+    context = "\n".join(
+        _BLOCK_TEMPLATE.format(n=c.n, filename=c.filename, page=c.page, content=c.content)
+        for c in chunks
+    )
+    return _USER_TEMPLATE.format(context_blocks=context, question=question)

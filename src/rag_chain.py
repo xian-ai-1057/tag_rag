@@ -1,4 +1,8 @@
-"""query() orchestrator + RagAnswer / CitedChunkRef DTOs."""
+"""query() orchestrator + RagAnswer / CitedChunkRef DTOs.
+
+雙路徑入口：reranked=None 走本地 retrieve()，否則直接吃外部（arrkb）reranked
+結果。流程固定為「檢索/注入 → 組 prompt → 呼叫 LLM → renumber citations」。
+"""
 import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -7,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.citation import renumber_and_filter
 from src.config import settings
 from src.llm import _get_llm
-from src.prompts import SYSTEM_PROMPT, _BLOCK_TEMPLATE, _USER_TEMPLATE
+from src.prompts import SYSTEM_PROMPT, build_user_message
 from src.retrieval import (
     RerankedChunk,
     RetrievedChunk,
@@ -64,11 +68,7 @@ def query(
             retrieved=[],
         )
     chunks = [to_retrieved_chunk(r, i + 1) for i, r in enumerate(reranked)]
-    context = "\n".join(
-        _BLOCK_TEMPLATE.format(n=c.n, filename=c.filename, page=c.page, content=c.content)
-        for c in chunks
-    )
-    user_msg = _USER_TEMPLATE.format(context_blocks=context, question=question)
+    user_msg = build_user_message(chunks, question)
     log.info("[query] assembled prompt: system=%d chars, user=%d chars",
              len(SYSTEM_PROMPT), len(user_msg))
     log.debug("[query] full user message:\n%s", user_msg)
@@ -79,7 +79,6 @@ def query(
         SystemMessage(content=SYSTEM_PROMPT),
         HumanMessage(content=user_msg),
     ])
-    print("\n===\n LLM raw response:", resp, "\n===\n")
     raw_answer = resp.content if isinstance(resp.content, str) else str(resp.content)
     log.info("[query] LLM raw answer (%d chars):\n%s", len(raw_answer), raw_answer)
 
