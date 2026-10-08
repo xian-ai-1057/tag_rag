@@ -1,49 +1,23 @@
-# Tag RAG — Citation MVP
+# Tag RAG: Local Document Q&A with Chunk Citations
 
-帶 chunk 級 inline `[n]` 引用的本地 RAG demo。
+A local retrieval-augmented generation demo for asking questions across documents and inspecting the source chunks cited in each answer. The focus is traceability: keeping retrieval metadata, inline citation numbers, and saved conversations connected so a reader can check the supporting text.
 
-- LLM / Embedding：本地 Ollama（OpenAI 相容介面）
-- Vector store：ChromaDB persistent（免 Docker）
-- UI：Streamlit
-- 支援格式：PDF / DOCX / XLSX / HTML / Markdown / TXT（Tier 2 完整支援）
+## What is implemented
 
-## 系統概觀（白話版）
+- PDF, DOCX, XLSX, HTML, Markdown, and text loaders feeding a shared chunking and ingestion pipeline
+- Local Ollama models for generation and embeddings, with persistent Chroma storage and a Streamlit interface
+- Chunk-level inline citations, removal of out-of-range citation markers, and numbering in first-appearance order
+- SQLite conversation history with citation snapshots for later inspection
 
-用「圖書館 + 助理」的比喻：把文件丟進「資料櫃」、提問時「助理」會去查資料、找出答案並附上「資料出處」。
+## Status and validation
 
-```mermaid
-flowchart TD
-    subgraph Step1["📚 步驟一：把資料放進系統"]
-        A1[📄 上傳文件<br/>PDF / Word / Excel / 網頁 / 文字檔] --> A2[✂️ 系統自動<br/>把長文件切成小段]
-        A2 --> A3[🗂️ 建立索引<br/>幫每段內容貼上標籤<br/>方便日後查找]
-        A3 --> A4[(📦 知識櫃<br/>儲存所有資料)]
-    end
+This is a local, single-user MVP. The vector store and history are shared within the installation; multi-user isolation and streaming are not implemented.
 
-    subgraph Step2["💬 步驟二：提問與回答"]
-        B1[🙋 使用者輸入問題] --> B2[🔍 系統去知識櫃<br/>找出最相關的幾段資料]
-        B2 --> B3[🤖 AI 助理閱讀這些資料<br/>整理出一段回答]
-        B3 --> B4[📎 自動標註資料來源<br/>方便使用者查證]
-        B4 --> B5[✅ 顯示答案 + 出處<br/>例如：根據文件 A 第 3 頁]
-    end
+Answer checks use character 3-gram overlap plus regular-expression checks for selected numeric and date patterns. These are lightweight review signals: lexical overlap does not establish semantic support, and a valid citation marker does not establish that a claim is correct. No measured latency or hallucination-detection accuracy is claimed.
 
-    subgraph Step3["🛡️ 步驟三：品質把關與記錄"]
-        C1[📊 自動評估答案品質<br/>檢查是否真的有出處支持<br/>標記可能編造的內容]
-        C2[💾 對話自動保存<br/>可隨時回顧過去問答]
-    end
+The repository includes mocked unit tests and integration tests, with a separate marker for tests requiring a running Ollama instance. See the [test instructions](#測試) for those boundaries.
 
-    A4 -.->|提供資料| B2
-    B5 --> C1
-    B5 --> C2
-
-    style Step1 fill:#e3f2fd
-    style Step2 fill:#f3e5f5
-    style Step3 fill:#fff3e0
-```
-
-**三句話總結**：
-1. **餵資料**：把公司文件丟進系統，它會自動切段、建索引存進「知識櫃」。
-2. **問答案**：使用者問問題，AI 從知識櫃找資料、寫出帶有「來源頁碼」的答案。
-3. **可信賴**：系統會自動檢查答案是否有依據、會不會亂講，並保留對話紀錄。
+Start with [local setup](#啟動步驟), then inspect the [RAG chain](src/rag_chain.py), [citation handling](src/citation.py), [evaluation heuristics](src/eval/), or [tests](tests/).
 
 ## 啟動步驟
 
@@ -95,13 +69,13 @@ streamlit run app.py
 
 ## 品質評估
 
-每條回答會自動執行品質評估，包括：
+每條回答會產生 deterministic、純規則基礎的品質報告，不會額外呼叫 LLM：
 
-- **Quality Score**：基於句級 support 與實體幻覺偵測的綜合評分
-- **Sentence Support**：每句話評估是否有對應的檢索出來的 chunk 支持
-- **Entity Hallucination**：使用規則型 regex 匹配（人名、數字、日期、組織名等），標記可能編造的實體
+- **Sentence Support**：比對句子與其引用 chunk 的字元 3-gram 重疊率；預設門檻為 0.15。這是字面重疊訊號，不能判定語意是否受到來源支持。
+- **Entity Flags**：以 regex 擷取目前支援的數字與日期模式（NUM / DATE），標記未出現在引用內容中的值。目前不做一般人名或組織名稱辨識。
+- **Quality Score**：彙整上述規則結果，協助人工檢查；不代表事實正確率，也不保證能偵測所有幻覺。
 
-評估邏輯為 Deterministic、純規則基礎、執行時間 < 500ms，無依賴 LLM 的額外呼叫。
+引用編號有效，只代表對應到檢索出的 chunk；仍需閱讀原文確認答案是否正確。本專案未提供執行延遲或幻覺偵測準確率的實測基準。
 
 ## 測試
 
@@ -207,7 +181,7 @@ flowchart TD
     Y --> Z2[evaluate ans<br/>src/eval]
     Y --> Z3[HistoryStore.add_message<br/>persist 到 SQLite]
 
-    Z2 --> Z2a[QualityReport<br/>sentence support + hallucination]
+    Z2 --> Z2a[QualityReport<br/>lexical support + NUM/DATE flags]
     Z3 --> Z3a[(SQLite)]
 ```
 
